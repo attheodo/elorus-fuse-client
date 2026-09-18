@@ -3,7 +3,7 @@
 Sandbox and production are separate deployments on separate domains, each with its
 own API key. Selecting an environment is therefore the single decision that
 determines whether a call issues a real, legally binding invoice, which is why
-:class:`ElorusFuseConfig` requires one rather than defaulting.
+:class:`Config` requires one rather than defaulting.
 """
 
 from enum import StrEnum

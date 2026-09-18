@@ -11,7 +11,8 @@ https://github.com/attheodo/elorus-fuse-client/blob/main/docs/api-contract.md
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+from types import TracebackType
+from typing import Any, Self
 from urllib.parse import urljoin
 
 import requests
@@ -37,7 +38,7 @@ INTEGRITY_ERRORS_KEY = 'integrity_errors'
 
 
 @dataclass(frozen=True)
-class ElorusFuseConfig:
+class Config:
     """Everything the client needs to reach Elorus Fuse.
 
     ``environment`` is required and has no default: it decides whether a call issues a
@@ -73,16 +74,44 @@ class ElorusFuseConfig:
         object.__setattr__(self, 'base_url', self.base_url or environment.base_url)
 
 
-class ElorusFuseClient:
-    """Issues and reads invoices through Elorus Fuse."""
+class Client:
+    """Issues and reads invoices through Elorus Fuse.
 
-    def __init__(
-        self, config: ElorusFuseConfig, session: requests.Session | None = None
-    ):
+    The client holds a connection pool. A long-lived process can keep one client for
+    its lifetime; anything shorter-lived should release the pool when done, either by
+    calling :meth:`close` or by using the client as a context manager::
+
+        with Client(config) as client:
+            result = client.create_invoice(draft)
+    """
+
+    def __init__(self, config: Config, session: requests.Session | None = None):
         self._config = config
         # Injectable so tests can substitute a transport, and so a caller can supply a
         # session with its own retry or pooling policy.
         self._session = session or requests.Session()
+        # A session supplied by the caller is the caller's to close; it may be shared
+        # with code this client knows nothing about.
+        self._owns_session = self._session is not session
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        self.close()
+
+    def close(self) -> None:
+        """Release the connection pool, if this client created it.
+
+        A session passed to the constructor is left open. Safe to call more than once.
+        """
+        if self._owns_session:
+            self._session.close()
 
     def create_invoice(self, draft: InvoiceDraft) -> InvoiceResult:
         """Issue an invoice.
