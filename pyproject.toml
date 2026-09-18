@@ -79,6 +79,11 @@ select = [
     "B",   # flake8-bugbear
 ]
 
+[tool.ruff.lint.per-file-ignores]
+# Member descriptions are reproduced verbatim from the Elorus Fuse OpenAPI document
+# and regenerated rather than hand-edited, so they are not wrapped.
+"src/elorus_fuse/enums.py" = ["E501"]
+
 [tool.ruff.lint.isort]
 known-first-party = ["elorus_fuse"]
 
