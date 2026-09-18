@@ -1,7 +1,7 @@
 """Tests for the Elorus Fuse HTTP client.
 
 The transport is faked, so these never touch the network. Response bodies mirror the
-shapes documented in docs/api-contract.md.
+shapes in Elorus' API documentation, including the undocumented 401.
 """
 
 import json as jsonlib

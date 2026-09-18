@@ -1,6 +1,10 @@
 # Credentials: never commit PyPI tokens
 .pypirc
 
+# Local-only documents: internal docs and release runbook
+docs/
+README-Release.md
+
 # Build artefacts
 dist/
 build/

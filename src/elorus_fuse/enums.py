@@ -17,8 +17,7 @@ parsing.
 
 Regenerate against a newer API version before trusting these for a new document type.
 
-Contract reference:
-https://github.com/attheodo/elorus-fuse-client/blob/main/docs/api-contract.md
+Provider documentation: https://developer.elorusfuse.gr/
 """
 
 from enum import IntEnum, StrEnum

@@ -5,8 +5,7 @@ configuration as an argument, speaks in the dataclasses of this package, and tur
 every failure into an ``ElorusFuseError``. Nothing above it needs to know that the
 provider is reached over HTTP.
 
-Contract reference:
-https://github.com/attheodo/elorus-fuse-client/blob/main/docs/api-contract.md
+Provider documentation: https://developer.elorusfuse.gr/
 """
 
 from collections.abc import Mapping

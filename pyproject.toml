@@ -55,7 +55,6 @@ packages = ["src/elorus_fuse"]
 include = [
     "src/elorus_fuse",
     "tests",
-    "docs/api-contract.md",
     "CHANGELOG.md",
 ]
 

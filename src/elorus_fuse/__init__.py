@@ -10,8 +10,7 @@ or an :class:`ElorusFuseError`::
     client = Client(Config(api_token=token, environment=Environment.SANDBOX))
     result = client.create_invoice(draft)
 
-Contract reference:
-https://github.com/attheodo/elorus-fuse-client/blob/main/docs/api-contract.md
+Provider documentation: https://developer.elorusfuse.gr/
 """
 
 from .client import Client, Config
