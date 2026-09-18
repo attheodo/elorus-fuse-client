@@ -1,0 +1,96 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "elorus-fuse-client"
+dynamic = ["version"]
+description = "Unofficial Python client for the Elorus Fuse API, for issuing Greek myDATA e-invoices."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "attheodo", email = "attheodo@atworks.gr" }]
+keywords = ["elorus", "fuse", "mydata", "aade", "e-invoicing", "greece", "invoice"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Natural Language :: English",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Office/Business :: Financial :: Accounting",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
+dependencies = ["requests>=2.32"]
+
+[project.optional-dependencies]
+dev = [
+    "build",
+    "mypy",
+    "pytest",
+    "ruff",
+    "twine",
+    "types-requests",
+]
+
+[project.urls]
+Homepage = "https://github.com/attheodo/elorus-fuse-client"
+Repository = "https://github.com/attheodo/elorus-fuse-client"
+Issues = "https://github.com/attheodo/elorus-fuse-client/issues"
+Changelog = "https://github.com/attheodo/elorus-fuse-client/blob/main/CHANGELOG.md"
+
+[tool.hatch.version]
+path = "src/elorus_fuse/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/elorus_fuse"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/elorus_fuse",
+    "tests",
+    "docs/api-contract.md",
+    "CHANGELOG.md",
+]
+
+[tool.ruff]
+line-length = 88
+indent-width = 4
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.format]
+quote-style = "single"
+indent-style = "space"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["elorus_fuse"]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src"]
+strict = true
+warn_unreachable = true
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = ["-ra", "--strict-markers", "--strict-config", "--import-mode=importlib"]
+xfail_strict = true
+filterwarnings = ["error"]

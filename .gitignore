@@ -1,0 +1,31 @@
+# Credentials: never commit PyPI tokens
+.pypirc
+
+# Build artefacts
+dist/
+build/
+*.egg-info/
+
+# Virtual environments
+.venv/
+venv/
+
+# Python caches
+__pycache__/
+*.py[cod]
+
+# Tool caches
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Local environment
+.env
+
+# OS / editor noise
+.DS_Store
+.idea/
+.vscode/
