@@ -20,6 +20,7 @@ from .environments import Environment
 from .errors import (
     ElorusFuseAuthenticationError,
     ElorusFuseConfigurationError,
+    ElorusFuseDuplicateInvoiceError,
     ElorusFuseError,
     ElorusFuseMyDataRejectionError,
     ElorusFuseProtocolError,
@@ -148,6 +149,64 @@ class Client:
                 return InvoiceResult.from_payload(item)
         return None
 
+    def find_invoice(
+        self, *, series: str, number: str, organization_vat: str
+    ) -> InvoiceResult | None:
+        """Find an invoice by its exact series and number.
+
+        Use this to investigate a create request whose outcome is unknown. A ``None``
+        result does not prove that the invoice was never issued: the original request
+        may still be in flight at Elorus. Do not use it as permission to create again.
+        """
+        if not number:
+            raise ValueError('Invoice number must be non-empty.')
+
+        payload = self._request(
+            'GET',
+            INVOICE_LIST_PATH,
+            params={'series': series if series else '-no-seq-', 'number': number},
+            headers={'X-Organization': organization_vat},
+        )
+        if not isinstance(payload, Mapping) or not isinstance(
+            payload.get('results'), list
+        ):
+            raise ElorusFuseProtocolError(
+                'Elorus Fuse returned an invalid invoice list.', body=payload
+            )
+
+        count = payload.get('count')
+        if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+            raise ElorusFuseProtocolError(
+                'Elorus Fuse returned an invalid invoice count.', body=payload
+            )
+
+        rows = payload['results']
+        matches: list[InvoiceResult] = []
+        for row in rows:
+            if (
+                not isinstance(row, Mapping)
+                or row.get('series', '') != series
+                or row.get('number') != number
+            ):
+                raise ElorusFuseProtocolError(
+                    'Elorus Fuse returned an invoice outside the requested series '
+                    'and number.',
+                    body=row,
+                )
+            matches.append(InvoiceResult.from_payload(row))
+
+        if count > 1 or len(matches) > 1:
+            raise ElorusFuseDuplicateInvoiceError(
+                'More than one Elorus Fuse invoice matched the series and number.',
+                count=count,
+                matches=matches,
+            )
+        if count != len(matches):
+            raise ElorusFuseProtocolError(
+                'Elorus Fuse returned an inconsistent invoice count.', body=payload
+            )
+        return matches[0] if matches else None
+
     def _request(
         self,
         method: str,
@@ -234,6 +293,7 @@ def _bad_request_error(body: Any) -> ElorusFuseError:
         )
 
     if 'mydata_errors' in body or 'rejected_reason' in body:
+        uid = body.get('uid')
         return ElorusFuseMyDataRejectionError(
             'myDATA rejected the invoice.',
             rejected_reason=body.get('rejected_reason'),
@@ -242,6 +302,8 @@ def _bad_request_error(body: Any) -> ElorusFuseError:
                 for item in body.get('mydata_errors') or []
                 if isinstance(item, Mapping)
             ],
+            uid=str(uid) if uid else '',
+            body=body,
         )
 
     if INTEGRITY_ERRORS_KEY in body:

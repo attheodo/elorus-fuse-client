@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:  # pragma: no cover - import cycle guard
     # responses.py raises from this module, so the dependency must stay one-way:
     # errors.py knows MyDataError only as a type.
-    from .responses import MyDataError
+    from .responses import InvoiceResult, MyDataError
 
 
 class ElorusFuseError(Exception):
@@ -82,10 +82,14 @@ class ElorusFuseMyDataRejectionError(ElorusFuseError):
         *,
         rejected_reason: int | None = None,
         errors: Sequence['MyDataError'] = (),
+        uid: str = '',
+        body: Mapping[str, Any] | None = None,
     ):
         super().__init__(message, messages=[str(error) for error in errors])
         self.rejected_reason = rejected_reason
         self.errors = tuple(errors)
+        self.uid = uid
+        self.body = body if body is not None else {}
 
 
 class ElorusFuseProtocolError(ElorusFuseError):
@@ -105,3 +109,14 @@ class ElorusFuseProtocolError(ElorusFuseError):
         super().__init__(message)
         self.status_code = status_code
         self.body = body
+
+
+class ElorusFuseDuplicateInvoiceError(ElorusFuseProtocolError):
+    """More than one invoice matched a lookup that must be unique."""
+
+    def __init__(
+        self, message: str, *, count: int, matches: Sequence['InvoiceResult']
+    ) -> None:
+        super().__init__(message)
+        self.count = count
+        self.matches = tuple(matches)

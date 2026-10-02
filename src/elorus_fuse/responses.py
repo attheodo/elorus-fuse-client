@@ -8,6 +8,7 @@ audit.
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 from .enums import MyDataStatus
@@ -55,6 +56,10 @@ class InvoiceResult:
     mydata_errors: tuple[MyDataError, ...] = ()
     #: The untouched provider body, kept for audit and support.
     raw: Mapping[str, Any] = field(default_factory=dict)
+    #: When Elorus created (issued) the invoice.
+    created: datetime | None = None
+    #: When Elorus submitted the invoice to myDATA.
+    submitted: datetime | None = None
 
     @property
     def mydata_status(self) -> MyDataStatus:
@@ -106,7 +111,20 @@ class InvoiceResult:
             rejected_reason=payload.get('rejected_reason'),
             mydata_errors=_mydata_errors(payload.get('mydata_errors')),
             raw=payload,
+            created=_timestamp(payload.get('created')),
+            submitted=_timestamp(payload.get('submitted')),
         )
+
+
+def _timestamp(value: Any) -> datetime | None:
+    """Ignore invalid or timezone-free timestamps in provider-owned data."""
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed if parsed.utcoffset() is not None else None
 
 
 def _mydata_errors(payload: Any) -> tuple[MyDataError, ...]:

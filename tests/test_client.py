@@ -6,6 +6,7 @@ shapes in Elorus' API documentation, including the undocumented 401.
 
 import json as jsonlib
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
 
 import pytest
@@ -24,6 +25,7 @@ from elorus_fuse import (
     InvoiceDraft,
     MyDataStatus,
 )
+from elorus_fuse.errors import ElorusFuseDuplicateInvoiceError
 
 DraftFactory = Callable[..., InvoiceDraft]
 
@@ -299,17 +301,12 @@ def test_integrity_errors_are_normalized(make_draft: DraftFactory) -> None:
 
 
 def test_mydata_rejection_is_a_distinct_error(make_draft: DraftFactory) -> None:
-    client, _ = build_client(
-        FakeResponse(
-            400,
-            {
-                'rejected_reason': 1,
-                'mydata_errors': [
-                    {'code': 217, 'message': 'Invalid counterpart VAT number'}
-                ],
-            },
-        )
-    )
+    body = {
+        'uid': 'REJECTED-UID',
+        'rejected_reason': 1,
+        'mydata_errors': [{'code': 217, 'message': 'Invalid counterpart VAT number'}],
+    }
+    client, _ = build_client(FakeResponse(400, body))
 
     with pytest.raises(ElorusFuseMyDataRejectionError) as excinfo:
         client.create_invoice(make_draft())
@@ -317,6 +314,8 @@ def test_mydata_rejection_is_a_distinct_error(make_draft: DraftFactory) -> None:
     assert excinfo.value.rejected_reason == 1
     assert excinfo.value.errors[0].code == 217
     assert excinfo.value.messages == ('217: Invalid counterpart VAT number',)
+    assert excinfo.value.uid == 'REJECTED-UID'
+    assert excinfo.value.body is body
 
 
 def test_already_signed_rejection_without_error_list(
@@ -328,6 +327,8 @@ def test_already_signed_rejection_without_error_list(
         client.create_invoice(make_draft())
 
     assert excinfo.value.rejected_reason == 3
+    assert excinfo.value.uid == ''
+    assert excinfo.value.body == {'rejected_reason': 3}
 
 
 def test_unauthenticated_is_an_authentication_error(make_draft: DraftFactory) -> None:
@@ -468,3 +469,189 @@ def test_surfaces_a_later_mydata_rejection() -> None:
     assert result is not None
     assert result.mydata_status == MyDataStatus.REJECTED
     assert result.mydata_errors[0].message == 'Bad VAT'
+
+
+def test_uid_refresh_can_remain_pending() -> None:
+    client, _ = build_client(FakeResponse(200, {'count': 1, 'results': [DELAYED_BODY]}))
+
+    result = client.get_invoice('9E8D7C6B5A43', organization_vat=ORGANIZATION_VAT)
+
+    assert result is not None
+    assert result.mydata_status is MyDataStatus.NOT_SUBMITTED
+
+
+@pytest.mark.parametrize(
+    ('created', 'submitted', 'expected_created', 'expected_submitted'),
+    [
+        (
+            '2026-09-04T10:30:00+03:00',
+            '2026-09-04T07:31:00Z',
+            datetime(2026, 9, 4, 10, 30, tzinfo=timezone(timedelta(hours=3))),
+            datetime(2026, 9, 4, 7, 31, tzinfo=UTC),
+        ),
+        ('2026-09-04T10:30:00', 'bad', None, None),
+        (None, 123, None, None),
+    ],
+)
+def test_timestamps_only_accept_aware_iso_datetimes(
+    make_draft: DraftFactory,
+    created: Any,
+    submitted: Any,
+    expected_created: datetime | None,
+    expected_submitted: datetime | None,
+) -> None:
+    client, _ = build_client(
+        FakeResponse(201, {**ACCEPTED_BODY, 'created': created, 'submitted': submitted})
+    )
+    result = client.create_invoice(make_draft())
+
+    assert result.created == expected_created
+    assert result.submitted == expected_submitted
+
+
+# find_invoice: exact series/number reconciliation
+
+
+def test_find_invoice_sends_exact_filters_and_organization_header() -> None:
+    row = {**ACCEPTED_BODY, 'series': 'MV', 'number': '141'}
+    client, session = build_client(FakeResponse(200, {'count': 1, 'results': [row]}))
+
+    result = client.find_invoice(
+        series='MV', number='141', organization_vat=ORGANIZATION_VAT
+    )
+
+    (call,) = session.calls
+    assert call['method'] == 'GET'
+    assert call['url'] == 'https://api.elorusfuse.gr/v1_0/invoice/list/'
+    assert call['params'] == {'series': 'MV', 'number': '141'}
+    assert call['headers']['X-Organization'] == ORGANIZATION_VAT
+    assert result is not None
+    assert result.uid == ACCEPTED_BODY['uid']
+
+
+@pytest.mark.parametrize(
+    ('series', 'wire_series', 'row_series'),
+    [('', '-no-seq-', ''), ('', '-no-seq-', None), ('0', '0', '0')],
+)
+def test_find_invoice_preserves_special_series_values(
+    series: str, wire_series: str, row_series: str | None
+) -> None:
+    row = {**ACCEPTED_BODY, 'number': '1'}
+    if row_series is not None:
+        row['series'] = row_series
+    client, session = build_client(FakeResponse(200, {'count': 1, 'results': [row]}))
+
+    result = client.find_invoice(
+        series=series, number='1', organization_vat=ORGANIZATION_VAT
+    )
+
+    assert result is not None
+    assert session.calls[0]['params']['series'] == wire_series
+
+
+def test_find_invoice_rejects_empty_number_before_request() -> None:
+    client, session = build_client()
+
+    with pytest.raises(ValueError, match='number'):
+        client.find_invoice(series='MV', number='', organization_vat=ORGANIZATION_VAT)
+
+    assert session.calls == []
+
+
+def test_find_invoice_returns_none_for_no_match() -> None:
+    client, _ = build_client(FakeResponse(200, {'count': 0, 'results': []}))
+
+    assert (
+        client.find_invoice(series='MV', number='1', organization_vat=ORGANIZATION_VAT)
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    ('count', 'rows', 'expected_matches'),
+    [
+        (2, [{**ACCEPTED_BODY, 'series': 'MV', 'number': '1'}], 1),
+        (
+            2,
+            [
+                {**ACCEPTED_BODY, 'series': 'MV', 'number': '1'},
+                {**DELAYED_BODY, 'series': 'MV', 'number': '1'},
+            ],
+            2,
+        ),
+    ],
+)
+def test_find_invoice_reports_duplicates_even_on_a_later_page(
+    count: int, rows: list[dict[str, Any]], expected_matches: int
+) -> None:
+    client, _ = build_client(FakeResponse(200, {'count': count, 'results': rows}))
+
+    with pytest.raises(ElorusFuseDuplicateInvoiceError) as excinfo:
+        client.find_invoice(series='MV', number='1', organization_vat=ORGANIZATION_VAT)
+
+    assert isinstance(excinfo.value, ElorusFuseProtocolError)
+    assert excinfo.value.count == count
+    assert len(excinfo.value.matches) == expected_matches
+    assert {item.uid for item in excinfo.value.matches} == {row['uid'] for row in rows}
+
+
+@pytest.mark.parametrize(
+    'row',
+    [
+        {**ACCEPTED_BODY, 'series': 'OTHER', 'number': '1'},
+        {**ACCEPTED_BODY, 'series': 'MV', 'number': '2'},
+        {**ACCEPTED_BODY, 'number': '1'},
+        'bad row',
+    ],
+)
+def test_find_invoice_rejects_rows_outside_exact_filter(row: Any) -> None:
+    client, _ = build_client(FakeResponse(200, {'count': 1, 'results': [row]}))
+
+    with pytest.raises(ElorusFuseProtocolError):
+        client.find_invoice(series='MV', number='1', organization_vat=ORGANIZATION_VAT)
+
+
+@pytest.mark.parametrize(
+    'body',
+    [
+        [],
+        {'count': 0},
+        {'count': 0, 'results': {}},
+        {'results': []},
+        {'count': True, 'results': []},
+        {'count': 1, 'results': []},
+    ],
+)
+def test_find_invoice_rejects_malformed_or_inconsistent_list(body: Any) -> None:
+    client, _ = build_client(FakeResponse(200, body))
+
+    with pytest.raises(ElorusFuseProtocolError):
+        client.find_invoice(series='MV', number='1', organization_vat=ORGANIZATION_VAT)
+
+
+@pytest.mark.parametrize(
+    ('response', 'raises', 'error_type'),
+    [
+        (None, requests.Timeout('slow'), ElorusFuseTransportError),
+        (
+            FakeResponse(401, {'detail': 'bad token'}),
+            None,
+            ElorusFuseAuthenticationError,
+        ),
+        (
+            FakeResponse(403, {'detail': 'forbidden'}),
+            None,
+            ElorusFuseAuthenticationError,
+        ),
+        (FakeResponse(500, {'detail': 'down'}), None, ElorusFuseProtocolError),
+    ],
+)
+def test_find_invoice_uses_existing_transport_and_status_errors(
+    response: FakeResponse | None,
+    raises: Exception | None,
+    error_type: type[Exception],
+) -> None:
+    client, _ = build_client(response, raises=raises)
+
+    with pytest.raises(error_type):
+        client.find_invoice(series='MV', number='1', organization_vat=ORGANIZATION_VAT)
