@@ -8,10 +8,13 @@ provider is reached over HTTP.
 Provider documentation: https://developer.elorusfuse.gr/
 """
 
-from collections.abc import Mapping
-from dataclasses import dataclass
+from __future__ import annotations
+
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field, replace
+from functools import wraps
 from types import TracebackType
-from typing import Any, Self
+from typing import Any, Concatenate, ParamSpec, Self, TypeVar, cast
 from urllib.parse import urljoin
 
 import requests
@@ -36,6 +39,25 @@ INVOICE_LIST_PATH = '/v1_0/invoice/list/'
 #: Elorus returns non-field validation failures under this single key.
 INTEGRITY_ERRORS_KEY = 'integrity_errors'
 
+_P = ParamSpec('_P')
+_R = TypeVar('_R')
+
+
+def _credential_safe(
+    method: Callable[Concatenate[Client, _P], _R],
+) -> Callable[Concatenate[Client, _P], _R]:
+    """Keep a provider echo of the API token out of public exception details."""
+
+    @wraps(method)
+    def wrapped(self: Client, *args: _P.args, **kwargs: _P.kwargs) -> _R:
+        try:
+            return method(self, *args, **kwargs)
+        except ElorusFuseError as exc:
+            _redact_error(exc, self._config.api_token)
+            raise
+
+    return cast('Callable[Concatenate[Client, _P], _R]', wrapped)
+
 
 @dataclass(frozen=True)
 class Config:
@@ -51,7 +73,7 @@ class Config:
     way to pick an environment.
     """
 
-    api_token: str
+    api_token: str = field(repr=False)
     environment: Environment
     base_url: str = ''
     timeout_seconds: float = 15.0
@@ -113,6 +135,7 @@ class Client:
         if self._owns_session:
             self._session.close()
 
+    @_credential_safe
     def create_invoice(self, draft: InvoiceDraft) -> InvoiceResult:
         """Issue an invoice.
 
@@ -124,6 +147,7 @@ class Client:
         payload = self._request('POST', INVOICE_PATH, json=draft.as_payload())
         return InvoiceResult.from_payload(payload)
 
+    @_credential_safe
     def get_invoice(self, uid: str, *, organization_vat: str) -> InvoiceResult | None:
         """Look an invoice up by uid.
 
@@ -149,6 +173,7 @@ class Client:
                 return InvoiceResult.from_payload(item)
         return None
 
+    @_credential_safe
     def find_invoice(
         self, *, series: str, number: str, organization_vat: str
     ) -> InvoiceResult | None:
@@ -232,15 +257,15 @@ class Client:
                 headers=request_headers,
                 timeout=self._config.timeout_seconds,
             )
-        except requests.Timeout as exc:
+        except requests.Timeout:
             raise ElorusFuseTransportError(
                 f'Elorus Fuse did not respond within '
                 f'{self._config.timeout_seconds} seconds.'
-            ) from exc
+            ) from None
         except requests.RequestException as exc:
             raise ElorusFuseTransportError(
                 f'Could not reach Elorus Fuse: {exc.__class__.__name__}.'
-            ) from exc
+            ) from None
 
         return self._handle(response)
 
@@ -272,6 +297,67 @@ class Client:
                 body=response.text[:500],
             )
         return payload
+
+
+def _redact_error(exc: ElorusFuseError, token: str) -> None:
+    """Remove a credential if the provider has echoed it in a failure response."""
+    exc.args = _redact(exc.args, token)
+    exc.messages = _redact(exc.messages, token)
+    if isinstance(exc, ElorusFuseValidationError):
+        exc.field_errors = _redact(exc.field_errors, token)
+    if isinstance(exc, ElorusFuseMyDataRejectionError):
+        exc.uid = _redact(exc.uid, token)
+        exc.body = _redact(exc.body, token)
+        exc.errors = tuple(
+            replace(error, message=_redact(error.message, token))
+            for error in exc.errors
+        )
+    if isinstance(exc, ElorusFuseProtocolError):
+        exc.body = _redact(exc.body, token)
+    if isinstance(exc, ElorusFuseDuplicateInvoiceError):
+        exc.matches = tuple(_redact_result(match, token) for match in exc.matches)
+
+
+def _redact_result(result: InvoiceResult, token: str) -> InvoiceResult:
+    return replace(
+        result,
+        uid=_redact(result.uid, token),
+        mark=_redact(result.mark, token),
+        authentication_code=_redact(result.authentication_code, token),
+        qr_url=_redact(result.qr_url, token),
+        mydata_qr_url=_redact(result.mydata_qr_url, token),
+        mydata_errors=tuple(
+            replace(error, message=_redact(error.message, token))
+            for error in result.mydata_errors
+        ),
+        raw=_redact(result.raw, token),
+    )
+
+
+def _redact(value: Any, token: str) -> Any:
+    """Copy nested JSON only where a secret actually appears."""
+    if isinstance(value, str):
+        return value.replace(token, '[REDACTED]') if token in value else value
+    if isinstance(value, Mapping):
+        pairs = [
+            (_redact(key, token), _redact(item, token)) for key, item in value.items()
+        ]
+        if all(
+            new_key is key and new_item is item
+            for (key, item), (new_key, new_item) in zip(
+                value.items(), pairs, strict=True
+            )
+        ):
+            return value
+        return dict(pairs)
+    if isinstance(value, (list, tuple)):
+        items = [_redact(item, token) for item in value]
+        if all(
+            original is cleaned for original, cleaned in zip(value, items, strict=True)
+        ):
+            return value
+        return tuple(items) if isinstance(value, tuple) else items
+    return value
 
 
 def _json_or_none(

@@ -29,6 +29,7 @@ from .environments import BASE_URLS, Environment
 from .errors import (
     ElorusFuseAuthenticationError,
     ElorusFuseConfigurationError,
+    ElorusFuseDuplicateInvoiceError,
     ElorusFuseError,
     ElorusFuseMyDataRejectionError,
     ElorusFuseProtocolError,
@@ -80,6 +81,7 @@ __all__ = [
     # Errors
     'ElorusFuseAuthenticationError',
     'ElorusFuseConfigurationError',
+    'ElorusFuseDuplicateInvoiceError',
     'ElorusFuseError',
     'ElorusFuseMyDataRejectionError',
     'ElorusFuseProtocolError',

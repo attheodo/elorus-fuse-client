@@ -17,6 +17,8 @@ from elorus_fuse import (
     Config,
     ElorusFuseAuthenticationError,
     ElorusFuseConfigurationError,
+    ElorusFuseDuplicateInvoiceError,
+    ElorusFuseError,
     ElorusFuseMyDataRejectionError,
     ElorusFuseProtocolError,
     ElorusFuseTransportError,
@@ -25,7 +27,6 @@ from elorus_fuse import (
     InvoiceDraft,
     MyDataStatus,
 )
-from elorus_fuse.errors import ElorusFuseDuplicateInvoiceError
 
 DraftFactory = Callable[..., InvoiceDraft]
 
@@ -153,6 +154,16 @@ def test_base_url_overrides_the_environment_host() -> None:
     )
 
     assert config.base_url == 'https://proxy.internal'
+
+
+def test_config_repr_hides_the_api_token_without_changing_equality() -> None:
+    config = Config(api_token='secret-token', environment=Environment.PRODUCTION)
+
+    assert 'secret-token' not in repr(config)
+    assert config == Config(
+        api_token='secret-token', environment=Environment.PRODUCTION
+    )
+    assert config != Config(api_token='other-token', environment=Environment.PRODUCTION)
 
 
 # Client lifecycle
@@ -655,3 +666,114 @@ def test_find_invoice_uses_existing_transport_and_status_errors(
 
     with pytest.raises(error_type):
         client.find_invoice(series='MV', number='1', organization_vat=ORGANIZATION_VAT)
+
+
+@pytest.mark.parametrize(
+    ('operation', 'response', 'raised'),
+    [
+        pytest.param('create', None, requests.Timeout('secret-token'), id='timeout'),
+        pytest.param(
+            'create', None, requests.ConnectionError('secret-token'), id='connection'
+        ),
+        pytest.param(
+            'create', FakeResponse(401, {'detail': 'secret-token'}), None, id='401'
+        ),
+        pytest.param(
+            'create', FakeResponse(403, {'detail': 'secret-token'}), None, id='403'
+        ),
+        pytest.param(
+            'create',
+            FakeResponse(400, {'secret-token': ['secret-token']}),
+            None,
+            id='400-field',
+        ),
+        pytest.param(
+            'create',
+            FakeResponse(400, {'integrity_errors': ['secret-token']}),
+            None,
+            id='400-integrity',
+        ),
+        pytest.param(
+            'create',
+            FakeResponse(
+                400,
+                {
+                    'uid': 'secret-token',
+                    'rejected_reason': 1,
+                    'mydata_errors': [{'code': 123, 'message': 'secret-token'}],
+                    'extra': {'nested': ['secret-token']},
+                },
+            ),
+            None,
+            id='400-mydata',
+        ),
+        pytest.param(
+            'create', FakeResponse(400, ['secret-token']), None, id='400-malformed'
+        ),
+        pytest.param(
+            'create',
+            FakeResponse(500, {'detail': 'secret-token'}),
+            None,
+            id='unexpected-status',
+        ),
+        pytest.param(
+            'create',
+            FakeResponse(201, None, text='secret-token'),
+            None,
+            id='non-json',
+        ),
+        pytest.param(
+            'create',
+            FakeResponse(201, {'debug': 'secret-token'}),
+            None,
+            id='missing-uid',
+        ),
+        pytest.param(
+            'find',
+            FakeResponse(
+                200,
+                {
+                    'count': 2,
+                    'results': [
+                        {
+                            'uid': 'secret-token',
+                            'series': 'MV',
+                            'number': '1',
+                            'debug': 'secret-token',
+                        }
+                    ],
+                },
+            ),
+            None,
+            id='duplicate',
+        ),
+        pytest.param(
+            'find',
+            FakeResponse(200, {'count': 1, 'results': 'secret-token'}),
+            None,
+            id='malformed-list',
+        ),
+    ],
+)
+def test_configured_token_is_absent_from_all_client_error_details(
+    make_draft: DraftFactory,
+    operation: str,
+    response: FakeResponse | None,
+    raised: Exception | None,
+) -> None:
+    client, _ = build_client(response, raises=raised)
+
+    with pytest.raises(ElorusFuseError) as excinfo:
+        if operation == 'find':
+            client.find_invoice(
+                series='MV', number='1', organization_vat=ORGANIZATION_VAT
+            )
+        else:
+            client.create_invoice(make_draft())
+
+    exc = excinfo.value
+    assert 'secret-token' not in str(exc)
+    assert 'secret-token' not in repr(exc)
+    assert 'secret-token' not in repr(exc.messages)
+    assert 'secret-token' not in repr(getattr(exc, 'body', None))
+    assert 'secret-token' not in repr(vars(exc))
