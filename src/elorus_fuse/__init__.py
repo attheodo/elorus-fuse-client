@@ -17,6 +17,8 @@ from .client import Client, Config
 from .enums import (
     IncomeClassificationCategory,
     IncomeClassificationType,
+    InvoiceSearchField,
+    InvoiceSeriesFilter,
     InvoiceType,
     MyDataStatus,
     PaymentMethodType,
@@ -27,9 +29,9 @@ from .enums import (
 )
 from .environments import BASE_URLS, Environment
 from .errors import (
+    ElorusFuseAmbiguousInvoiceError,
     ElorusFuseAuthenticationError,
     ElorusFuseConfigurationError,
-    ElorusFuseDuplicateInvoiceError,
     ElorusFuseError,
     ElorusFuseMyDataRejectionError,
     ElorusFuseProtocolError,
@@ -46,9 +48,9 @@ from .payloads import (
     quantize_amount,
     quantize_rate,
 )
-from .responses import InvoiceResult, MyDataError
+from .responses import InvoicePage, InvoiceResult, MyDataError
 
-__version__ = '0.1.0'
+__version__ = '0.2.0'
 
 __all__ = [
     # Client
@@ -66,11 +68,14 @@ __all__ = [
     'quantize_amount',
     'quantize_rate',
     # Responses
+    'InvoicePage',
     'InvoiceResult',
     'MyDataError',
     # myDATA vocabularies
     'IncomeClassificationCategory',
     'IncomeClassificationType',
+    'InvoiceSearchField',
+    'InvoiceSeriesFilter',
     'InvoiceType',
     'MyDataStatus',
     'PaymentMethodType',
@@ -79,9 +84,9 @@ __all__ = [
     'VatCategory',
     'VatExemptionCategory',
     # Errors
+    'ElorusFuseAmbiguousInvoiceError',
     'ElorusFuseAuthenticationError',
     'ElorusFuseConfigurationError',
-    'ElorusFuseDuplicateInvoiceError',
     'ElorusFuseError',
     'ElorusFuseMyDataRejectionError',
     'ElorusFuseProtocolError',

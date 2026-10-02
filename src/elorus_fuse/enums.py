@@ -352,3 +352,22 @@ class MyDataStatus(StrEnum):
     NOT_SUBMITTED = 'not_submitted'
     #: myDATA refused the document.
     REJECTED = 'rejected'
+
+
+class InvoiceSearchField(StrEnum):
+    """Fields the invoice list endpoint can search."""
+
+    MARK = 'mark'
+    UID = 'uid'
+    AUTHENTICATION_CODE = 'authentication_code'
+
+
+class InvoiceSeriesFilter(StrEnum):
+    """Special values understood by the invoice list ``series`` filter."""
+
+    #: Match invoices whose sequence is empty.
+    NO_SEQUENCE = '-no-seq-'
+    #: Match invoices whose sequence is literally ``"0"``.
+    ZERO = '0'
+    #: Match invoices with either an empty sequence or a sequence of ``"0"``.
+    NO_SEQUENCE_OR_ZERO = '-no-seq-or-zero-'

@@ -14,8 +14,9 @@ for issuing Greek e-invoices through a certified provider and tracking what
 ## Status and scope
 
 - **Two endpoints of nine.** The library can issue an invoice (`POST /v1_0/invoice/`)
-  and look one up by uid (`GET /v1_0/invoice/list/`). Invoice email, QR images,
-  payment methods, cancellations and the rest are not implemented.
+  and list or filter issued invoices (`GET /v1_0/invoice/list/`).
+  Invoice email, QR images, payment methods, cancellations and the rest are not
+  implemented.
 - **Pre-1.0.** The `0.x` series may make breaking changes between minor versions.
 - **Tested against mocks only.** The request payload was checked field by field against
   Elorus' OpenAPI document, and every test fakes the HTTP transport. It has not yet
@@ -139,6 +140,55 @@ else:
 `organization_vat` is your issuer VAT number. The lookup endpoint cannot infer the
 organization from a request body, so it has to be passed explicitly.
 
+`list_invoices` exposes the complete documented JSON list endpoint. For example, this
+fetches the second page of rejected service invoices from 2026 and asks Elorus to
+include their detailed XML:
+
+```python
+from datetime import date
+
+from elorus_fuse import InvoiceType, MyDataStatus
+
+with Client(config) as client:
+    page = client.list_invoices(
+        organization_vat='123456789',
+        period_from=date(2026, 1, 1),
+        period_to=date(2026, 12, 31),
+        invoice_type=InvoiceType.SERVICES_RENDERED,
+        mydata_status=MyDataStatus.REJECTED,
+        page=2,
+        page_size=250,
+        detailed_xml=True,
+    )
+
+print('total matches:', page.count, 'next:', page.next, 'previous:', page.previous)
+for found in page.results:
+    print(found.uid, found.created, found.mydata_xml)
+```
+
+Every documented filter is supported: `search`, `search_fields`, `period_from`,
+`period_to`, `invoice_type`, `mydata_status`, `transmission_failure`, `series`,
+`number`, `page`, `page_size` and `detailed_xml`. `search_fields` accepts
+`InvoiceSearchField` members, raw values, or a comma-separated string; omitting it
+makes Elorus search all searchable fields. Date bounds must be supplied together.
+`page_size` may be at most 250.
+
+`InvoicePage.count` is the total across every page, `results` contains the current
+page, and `next`/`previous` carry Elorus' pagination URLs. The three special series
+filters are available as `InvoiceSeriesFilter.NO_SEQUENCE`, `.ZERO` and
+`.NO_SEQUENCE_OR_ZERO`. Each result retains the complete provider object in `.raw`,
+including fields that the normalized response model does not expose directly.
+
+If a create request timed out or a worker disappeared before saving its response,
+`find_invoice` is a strict convenience for the exact series/number lookup. It returns
+zero or one invoice. Multiple matches raise `ElorusFuseAmbiguousInvoiceError`, with
+the provider's total in `.count` and up to two parsed rows in `.matches`. Applications
+that expect multiple matches should call `list_invoices(series=..., number=...)`.
+
+**A `None` result from `find_invoice` does not prove the invoice was never issued:**
+the original create request may still be in flight. Do not treat `None` as permission
+to create again. Use `get_invoice` when you already have a uid.
+
 For display, `result.verification_url` gives the best available verification page. It
 is the myDATA (IAPR) page once one exists, and before that the Elorus page, which
 redirects to the IAPR one when myDATA answers.
@@ -173,6 +223,17 @@ seconds and can be changed with `Config(timeout_seconds=...)`.
   `quantize_amount` to round figures you store yourself the same way.
 - **VAT is supplied per line.** `VatCategory.VAT_24` is a myDATA code, not a rate, so
   compute `vat_amount` yourself.
+- **VAT exemptions are optional.** Set `vat_exemption_category` to a
+  `VatExemptionCategory` member or its numeric code. The client validates the code;
+  Elorus validates whether it belongs with the invoice's VAT category.
+- **Quantity and exchange rate use five decimal places.** Set `InvoiceLine.quantity`
+  and `InvoiceDraft.exchange_rate` only when applicable. Both must be positive and
+  are rounded half up; `quantize_rate` gives callers the exact value sent.
+- **myDATA line comments are optional.** `line_comments_mydata` is sent only when
+  nonempty and must be at most 150 characters. Truncate in the application if needed.
+- **Retail invoices may omit the counterparty.** Pass `counterparty=None` explicitly
+  to omit every `cp_*` field. The argument remains required, and Elorus decides which
+  invoice types allow an absent counterparty.
 - **Coded fields are validated when the draft is built.** Enum members and raw wire
   values (`vat_category=1`, `invoice_type='2.1'`) both work. An unknown code raises
   `ValueError` immediately, instead of coming back as a rejection of a real invoice.
@@ -181,8 +242,10 @@ seconds and can be changed with `Config(timeout_seconds=...)`.
   similar when you need them.
 
 The myDATA vocabularies are exposed as enums: `InvoiceType`, `VatCategory`,
-`PaymentMethodType`, `IncomeClassificationCategory`, `IncomeClassificationType`,
-`TransmissionFailure`, `RejectedReason` and `MyDataStatus`.
+`VatExemptionCategory`, `PaymentMethodType`, `IncomeClassificationCategory`,
+`IncomeClassificationType`, `TransmissionFailure`, `RejectedReason` and
+`MyDataStatus`. The list endpoint also exposes `InvoiceSearchField` and
+`InvoiceSeriesFilter`.
 
 ## Error handling
 
@@ -195,13 +258,16 @@ ElorusFuseError
 ├── ElorusFuseTransportError        no usable response: timeout, DNS, connection, TLS
 ├── ElorusFuseAuthenticationError   401 bad or missing key, 403 not permitted (.status_code)
 ├── ElorusFuseValidationError       400, rejected by Elorus before myDATA (.field_errors)
-├── ElorusFuseMyDataRejectionError  400, rejected by myDATA (.rejected_reason, .errors)
-└── ElorusFuseProtocolError         unexpected status, non-JSON body, success without a uid
+├── ElorusFuseMyDataRejectionError  400, rejected by myDATA (.rejected_reason, .errors, .uid, .body)
+├── ElorusFuseProtocolError         unexpected status, malformed body, success without a uid
+└── ElorusFuseAmbiguousInvoiceError singular lookup has multiple matches (.count, .matches)
 ```
 
 Every exception has a `.messages` tuple of provider-supplied detail lines, safe to show
-to an operator. Credentials never appear in exception text. `ElorusFuseProtocolError`
-also carries `.status_code` and `.body` for diagnosis.
+to an operator. The configured API token is redacted if the provider echoes it in an
+error. `ElorusFuseProtocolError` also carries `.status_code` and `.body` for diagnosis.
+If a myDATA rejection names a held document, its `.uid` can be refreshed with
+`get_invoice`; otherwise use `find_invoice` to investigate its series and number.
 
 ```python
 from elorus_fuse import (
@@ -225,10 +291,9 @@ except ElorusFuseError as exc:
 ```
 
 > **An `ElorusFuseTransportError` is indeterminate.** The request may or may not have
-> reached Elorus, so the invoice may or may not exist. The library does not retry, and
-> it cannot tell which happened, because the uid it would need is only returned on
-> success. Check the Elorus Fuse dashboard before issuing the same invoice again, or you
-> risk a duplicate.
+> reached Elorus, so the invoice may or may not exist. The library does not retry.
+> Use `find_invoice` to investigate the intended series and number, and resolve any
+> uncertainty before issuing again.
 
 Invalid drafts are caught before any request is made. An unknown enum code or an
 invoice with no lines raises a plain `ValueError` when the draft is constructed.

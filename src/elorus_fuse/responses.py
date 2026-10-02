@@ -60,6 +60,8 @@ class InvoiceResult:
     created: datetime | None = None
     #: When Elorus submitted the invoice to myDATA.
     submitted: datetime | None = None
+    #: Detailed IAPR XML, when requested from the list endpoint.
+    mydata_xml: str = ''
 
     @property
     def mydata_status(self) -> MyDataStatus:
@@ -113,6 +115,57 @@ class InvoiceResult:
             raw=payload,
             created=_timestamp(payload.get('created')),
             submitted=_timestamp(payload.get('submitted')),
+            mydata_xml=payload.get('mydata_xml') or '',
+        )
+
+
+@dataclass(frozen=True)
+class InvoicePage:
+    """One page returned by Elorus' general invoice-list endpoint."""
+
+    count: int
+    results: tuple[InvoiceResult, ...]
+    next: str | None = None
+    previous: str | None = None
+
+    @classmethod
+    def from_payload(cls, payload: Any) -> 'InvoicePage':
+        """Build a page while rejecting malformed pagination metadata."""
+        if not isinstance(payload, Mapping) or not isinstance(
+            payload.get('results'), list
+        ):
+            raise ElorusFuseProtocolError(
+                'Elorus Fuse returned an invalid invoice list.', body=payload
+            )
+
+        count = payload.get('count')
+        if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+            raise ElorusFuseProtocolError(
+                'Elorus Fuse returned an invalid invoice count.', body=payload
+            )
+
+        next_page = payload.get('next')
+        if next_page is not None and not isinstance(next_page, str):
+            raise ElorusFuseProtocolError(
+                'Elorus Fuse returned an invalid next-page URL.', body=payload
+            )
+
+        previous_page = payload.get('previous')
+        if previous_page is not None and not isinstance(previous_page, str):
+            raise ElorusFuseProtocolError(
+                'Elorus Fuse returned an invalid previous-page URL.', body=payload
+            )
+
+        results = tuple(InvoiceResult.from_payload(row) for row in payload['results'])
+        if len(results) > count:
+            raise ElorusFuseProtocolError(
+                'Elorus Fuse returned an inconsistent invoice count.', body=payload
+            )
+        return cls(
+            count=count,
+            results=results,
+            next=next_page,
+            previous=previous_page,
         )
 
 

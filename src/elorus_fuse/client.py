@@ -10,8 +10,10 @@ Provider documentation: https://developer.elorusfuse.gr/
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
+from datetime import date, datetime
+from enum import Enum, IntEnum
 from functools import wraps
 from types import TracebackType
 from typing import Any, Concatenate, ParamSpec, Self, TypeVar, cast
@@ -19,11 +21,18 @@ from urllib.parse import urljoin
 
 import requests
 
+from .enums import (
+    InvoiceSearchField,
+    InvoiceSeriesFilter,
+    InvoiceType,
+    MyDataStatus,
+    TransmissionFailure,
+)
 from .environments import Environment
 from .errors import (
+    ElorusFuseAmbiguousInvoiceError,
     ElorusFuseAuthenticationError,
     ElorusFuseConfigurationError,
-    ElorusFuseDuplicateInvoiceError,
     ElorusFuseError,
     ElorusFuseMyDataRejectionError,
     ElorusFuseProtocolError,
@@ -31,7 +40,7 @@ from .errors import (
     ElorusFuseValidationError,
 )
 from .payloads import InvoiceDraft
-from .responses import InvoiceResult, MyDataError
+from .responses import InvoicePage, InvoiceResult, MyDataError
 
 INVOICE_PATH = '/v1_0/invoice/'
 INVOICE_LIST_PATH = '/v1_0/invoice/list/'
@@ -41,6 +50,7 @@ INTEGRITY_ERRORS_KEY = 'integrity_errors'
 
 _P = ParamSpec('_P')
 _R = TypeVar('_R')
+_E = TypeVar('_E', bound=Enum)
 
 
 def _credential_safe(
@@ -174,63 +184,165 @@ class Client:
         return None
 
     @_credential_safe
-    def find_invoice(
-        self, *, series: str, number: str, organization_vat: str
-    ) -> InvoiceResult | None:
-        """Find an invoice by its exact series and number.
+    def list_invoices(
+        self,
+        *,
+        organization_vat: str,
+        search: str | None = None,
+        search_fields: Sequence[InvoiceSearchField | str] | str = (),
+        period_from: date | None = None,
+        period_to: date | None = None,
+        invoice_type: InvoiceType | str | None = None,
+        mydata_status: MyDataStatus | str | None = None,
+        transmission_failure: TransmissionFailure | int | str | None = None,
+        series: str | None = None,
+        number: str | None = None,
+        page: int | None = None,
+        page_size: int | None = None,
+        detailed_xml: bool | None = None,
+    ) -> InvoicePage:
+        """Return one filtered page from Elorus' invoice list endpoint.
 
-        Use this to investigate a create request whose outcome is unknown. A ``None``
-        result does not prove that the invoice was never issued: the original request
-        may still be in flight at Elorus. Do not use it as permission to create again.
+        All documented query parameters are available. The provider defaults to 100
+        rows per page and accepts at most 250. Enum fields also accept their raw wire
+        values at runtime, consistent with the request models.
         """
-        if not number:
-            raise ValueError('Invoice number must be non-empty.')
+        if not isinstance(organization_vat, str) or not organization_vat:
+            raise ValueError('organization_vat must be non-empty.')
+        if search is not None and not isinstance(search, str):
+            raise ValueError('search must be a string.')
+        if search_fields and search is None:
+            raise ValueError('search_fields requires a search term.')
+        if (period_from is None) != (period_to is None):
+            raise ValueError('period_from and period_to must be provided together.')
+        if period_from is not None and (
+            not isinstance(period_from, date) or isinstance(period_from, datetime)
+        ):
+            raise ValueError('period_from must be a date.')
+        if period_to is not None and (
+            not isinstance(period_to, date) or isinstance(period_to, datetime)
+        ):
+            raise ValueError('period_to must be a date.')
+        if series is not None and not isinstance(series, str):
+            raise ValueError('series must be a string.')
+        if number is not None and not isinstance(number, str):
+            raise ValueError('number must be a string.')
+        if page is not None and (
+            isinstance(page, bool) or not isinstance(page, int) or page < 1
+        ):
+            raise ValueError('page must be a positive integer.')
+        if page_size is not None and (
+            isinstance(page_size, bool)
+            or not isinstance(page_size, int)
+            or not 1 <= page_size <= 250
+        ):
+            raise ValueError('page_size must be between 1 and 250.')
+        if detailed_xml is not None and not isinstance(detailed_xml, bool):
+            raise ValueError('detailed_xml must be a boolean.')
+
+        if isinstance(search_fields, str):
+            raw_search_fields = search_fields.strip()
+            search_field_values: Sequence[InvoiceSearchField | str] = (
+                tuple(part.strip() for part in raw_search_fields.split(','))
+                if raw_search_fields
+                else ()
+            )
+        else:
+            search_field_values = search_fields
+        normalized_search_fields = tuple(
+            _query_enum(value, InvoiceSearchField, 'search_fields')
+            for value in search_field_values
+        )
+        normalized_invoice_type = _optional_query_enum(
+            invoice_type, InvoiceType, 'invoice_type'
+        )
+        normalized_status = _optional_query_enum(
+            mydata_status, MyDataStatus, 'mydata_status'
+        )
+        normalized_failure = _optional_query_enum(
+            transmission_failure, TransmissionFailure, 'transmission_failure'
+        )
+
+        params: dict[str, Any] = {}
+        if search is not None:
+            params['search'] = search
+        if normalized_search_fields:
+            params['search_fields'] = ','.join(
+                field.value for field in normalized_search_fields
+            )
+        if period_from is not None and period_to is not None:
+            params['period_from'] = period_from.isoformat()
+            params['period_to'] = period_to.isoformat()
+        if normalized_invoice_type is not None:
+            params['invoice_type'] = normalized_invoice_type.value
+        if normalized_status is not None:
+            params['mydata_status'] = normalized_status.value
+        if normalized_failure is not None:
+            params['transmission_failure'] = str(normalized_failure.value)
+        if series is not None:
+            params['series'] = series
+        if number is not None:
+            params['number'] = number
+        if page is not None:
+            params['page'] = page
+        if page_size is not None:
+            params['page_size'] = page_size
+        if detailed_xml is not None:
+            params['detailed_xml'] = '1' if detailed_xml else '0'
 
         payload = self._request(
             'GET',
             INVOICE_LIST_PATH,
-            params={'series': series if series else '-no-seq-', 'number': number},
+            params=params,
             headers={'X-Organization': organization_vat},
         )
-        if not isinstance(payload, Mapping) or not isinstance(
-            payload.get('results'), list
-        ):
-            raise ElorusFuseProtocolError(
-                'Elorus Fuse returned an invalid invoice list.', body=payload
-            )
+        return InvoicePage.from_payload(payload)
 
-        count = payload.get('count')
-        if isinstance(count, bool) or not isinstance(count, int) or count < 0:
-            raise ElorusFuseProtocolError(
-                'Elorus Fuse returned an invalid invoice count.', body=payload
-            )
+    @_credential_safe
+    def find_invoice(
+        self, *, series: str, number: str, organization_vat: str
+    ) -> InvoiceResult | None:
+        """Require an exact series/number lookup to resolve to at most one invoice.
 
-        rows = payload['results']
-        matches: list[InvoiceResult] = []
-        for row in rows:
-            if (
-                not isinstance(row, Mapping)
-                or row.get('series', '') != series
-                or row.get('number') != number
-            ):
+        Use this to investigate a create request whose outcome is unknown. A ``None``
+        result does not prove that the invoice was never issued: the original request
+        may still be in flight at Elorus. Do not use it as permission to create again.
+
+        Raises :class:`ElorusFuseAmbiguousInvoiceError` when the provider reports
+        multiple matches. Use :meth:`list_invoices` when multiple matches are useful.
+        """
+        if not number:
+            raise ValueError('Invoice number must be non-empty.')
+        series_filter = series if series else InvoiceSeriesFilter.NO_SEQUENCE
+        page = self.list_invoices(
+            organization_vat=organization_vat,
+            series=series_filter,
+            number=number,
+            page_size=2,
+        )
+        for result in page.results:
+            row = result.raw
+            if row.get('series', '') != series or row.get('number') != number:
                 raise ElorusFuseProtocolError(
                     'Elorus Fuse returned an invoice outside the requested series '
                     'and number.',
                     body=row,
                 )
-            matches.append(InvoiceResult.from_payload(row))
-
-        if count > 1 or len(matches) > 1:
-            raise ElorusFuseDuplicateInvoiceError(
-                'More than one Elorus Fuse invoice matched the series and number.',
-                count=count,
-                matches=matches,
-            )
-        if count != len(matches):
+        if page.count and not page.results:
             raise ElorusFuseProtocolError(
-                'Elorus Fuse returned an inconsistent invoice count.', body=payload
+                'Elorus Fuse returned an inconsistent invoice page.'
             )
-        return matches[0] if matches else None
+        if page.count > 1:
+            raise ElorusFuseAmbiguousInvoiceError(
+                'More than one Elorus Fuse invoice matched the series and number.',
+                count=page.count,
+                matches=page.results,
+            )
+        if page.count != len(page.results):
+            raise ElorusFuseProtocolError(
+                'Elorus Fuse returned an inconsistent invoice page.'
+            )
+        return page.results[0] if page.results else None
 
     def _request(
         self,
@@ -299,6 +411,26 @@ class Client:
         return payload
 
 
+def _query_enum(value: Any, enum: type[_E], field_name: str) -> _E:
+    """Normalize one list-filter code while accepting its raw wire value."""
+    candidate = value
+    if issubclass(enum, IntEnum) and isinstance(value, str):
+        try:
+            candidate = int(value)
+        except ValueError:
+            pass
+    try:
+        return enum(candidate)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f'{value!r} is not a valid {field_name}.') from exc
+
+
+def _optional_query_enum(
+    value: Any | None, enum: type[_E], field_name: str
+) -> _E | None:
+    return None if value is None else _query_enum(value, enum, field_name)
+
+
 def _redact_error(exc: ElorusFuseError, token: str) -> None:
     """Remove a credential if the provider has echoed it in a failure response."""
     exc.args = _redact(exc.args, token)
@@ -314,7 +446,7 @@ def _redact_error(exc: ElorusFuseError, token: str) -> None:
         )
     if isinstance(exc, ElorusFuseProtocolError):
         exc.body = _redact(exc.body, token)
-    if isinstance(exc, ElorusFuseDuplicateInvoiceError):
+    if isinstance(exc, ElorusFuseAmbiguousInvoiceError):
         exc.matches = tuple(_redact_result(match, token) for match in exc.matches)
 
 
@@ -326,6 +458,7 @@ def _redact_result(result: InvoiceResult, token: str) -> InvoiceResult:
         authentication_code=_redact(result.authentication_code, token),
         qr_url=_redact(result.qr_url, token),
         mydata_qr_url=_redact(result.mydata_qr_url, token),
+        mydata_xml=_redact(result.mydata_xml, token),
         mydata_errors=tuple(
             replace(error, message=_redact(error.message, token))
             for error in result.mydata_errors

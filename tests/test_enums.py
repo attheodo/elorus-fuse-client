@@ -18,6 +18,8 @@ from elorus_fuse import (
     InvoiceDraft,
     InvoiceLine,
     InvoiceResult,
+    InvoiceSearchField,
+    InvoiceSeriesFilter,
     InvoiceType,
     MyDataStatus,
     PaymentMethod,
@@ -51,6 +53,8 @@ def test_str_enums_are_their_codes() -> None:
     assert IncomeClassificationCategory.SERVICES == 'category1_3'
     assert IncomeClassificationType.E3_561_001 == 'E3_561_001'
     assert MyDataStatus.NOT_SUBMITTED == 'not_submitted'
+    assert InvoiceSearchField.AUTHENTICATION_CODE == 'authentication_code'
+    assert InvoiceSeriesFilter.NO_SEQUENCE_OR_ZERO == '-no-seq-or-zero-'
 
 
 def test_members_serialize_as_bare_values() -> None:

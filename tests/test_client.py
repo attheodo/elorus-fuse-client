@@ -6,7 +6,7 @@ shapes in Elorus' API documentation, including the undocumented 401.
 
 import json as jsonlib
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta, timezone
 from typing import Any
 
 import pytest
@@ -15,9 +15,9 @@ import requests
 from elorus_fuse import (
     Client,
     Config,
+    ElorusFuseAmbiguousInvoiceError,
     ElorusFuseAuthenticationError,
     ElorusFuseConfigurationError,
-    ElorusFuseDuplicateInvoiceError,
     ElorusFuseError,
     ElorusFuseMyDataRejectionError,
     ElorusFuseProtocolError,
@@ -25,7 +25,11 @@ from elorus_fuse import (
     ElorusFuseValidationError,
     Environment,
     InvoiceDraft,
+    InvoiceSearchField,
+    InvoiceSeriesFilter,
+    InvoiceType,
     MyDataStatus,
+    TransmissionFailure,
 )
 
 DraftFactory = Callable[..., InvoiceDraft]
@@ -520,24 +524,246 @@ def test_timestamps_only_accept_aware_iso_datetimes(
     assert result.submitted == expected_submitted
 
 
-# find_invoice: exact series/number reconciliation
+# list_invoices
 
 
-def test_find_invoice_sends_exact_filters_and_organization_header() -> None:
-    row = {**ACCEPTED_BODY, 'series': 'MV', 'number': '141'}
-    client, session = build_client(FakeResponse(200, {'count': 1, 'results': [row]}))
+def test_list_invoices_supports_every_documented_query_parameter() -> None:
+    row = {**ACCEPTED_BODY, 'mydata_xml': '<RequestedDoc/>'}
+    next_page = 'https://api.elorusfuse.gr/v1_0/invoice/list/?page=3'
+    previous_page = 'https://api.elorusfuse.gr/v1_0/invoice/list/?page=1'
+    client, session = build_client(
+        FakeResponse(
+            200,
+            {
+                'count': 251,
+                'next': next_page,
+                'previous': previous_page,
+                'results': [row],
+            },
+        )
+    )
 
-    result = client.find_invoice(
-        series='MV', number='141', organization_vat=ORGANIZATION_VAT
+    page = client.list_invoices(
+        organization_vat=ORGANIZATION_VAT,
+        search='needle',
+        search_fields=(
+            InvoiceSearchField.MARK,
+            InvoiceSearchField.UID,
+            InvoiceSearchField.AUTHENTICATION_CODE,
+        ),
+        period_from=date(2026, 1, 1),
+        period_to=date(2026, 12, 31),
+        invoice_type=InvoiceType.SERVICES_RENDERED,
+        mydata_status=MyDataStatus.REJECTED,
+        transmission_failure=TransmissionFailure.PROVIDER_TO_MYDATA,
+        series='MV',
+        number='141',
+        page=2,
+        page_size=250,
+        detailed_xml=True,
     )
 
     (call,) = session.calls
     assert call['method'] == 'GET'
     assert call['url'] == 'https://api.elorusfuse.gr/v1_0/invoice/list/'
-    assert call['params'] == {'series': 'MV', 'number': '141'}
+    assert call['params'] == {
+        'search': 'needle',
+        'search_fields': 'mark,uid,authentication_code',
+        'period_from': '2026-01-01',
+        'period_to': '2026-12-31',
+        'invoice_type': '2.1',
+        'mydata_status': 'rejected',
+        'transmission_failure': '2',
+        'series': 'MV',
+        'number': '141',
+        'page': 2,
+        'page_size': 250,
+        'detailed_xml': '1',
+    }
     assert call['headers']['X-Organization'] == ORGANIZATION_VAT
-    assert result is not None
-    assert result.uid == ACCEPTED_BODY['uid']
+    assert page.count == 251
+    assert page.next == next_page
+    assert page.previous == previous_page
+    assert page.results[0].mydata_xml == '<RequestedDoc/>'
+
+
+@pytest.mark.parametrize(
+    'series',
+    [
+        InvoiceSeriesFilter.NO_SEQUENCE,
+        InvoiceSeriesFilter.ZERO,
+        InvoiceSeriesFilter.NO_SEQUENCE_OR_ZERO,
+        'CUSTOM',
+    ],
+)
+def test_list_invoices_passes_series_filters_through_exactly(series: str) -> None:
+    client, session = build_client(FakeResponse(200, {'count': 0, 'results': []}))
+
+    client.list_invoices(organization_vat=ORGANIZATION_VAT, series=series)
+
+    assert session.calls[0]['params']['series'] == series
+
+
+def test_list_invoices_accepts_raw_enum_values_and_false_detailed_xml() -> None:
+    client, session = build_client(FakeResponse(200, {'count': 0, 'results': []}))
+
+    client.list_invoices(
+        organization_vat=ORGANIZATION_VAT,
+        search='x',
+        search_fields=['uid', 'mark'],
+        invoice_type='11.1',
+        mydata_status='success',
+        transmission_failure='4',
+        detailed_xml=False,
+    )
+
+    assert session.calls[0]['params'] == {
+        'search': 'x',
+        'search_fields': 'uid,mark',
+        'invoice_type': '11.1',
+        'mydata_status': 'success',
+        'transmission_failure': '4',
+        'detailed_xml': '0',
+    }
+
+
+def test_list_invoices_accepts_comma_separated_search_fields() -> None:
+    client, session = build_client(FakeResponse(200, {'count': 0, 'results': []}))
+
+    client.list_invoices(
+        organization_vat=ORGANIZATION_VAT,
+        search='x',
+        search_fields='uid, authentication_code',
+    )
+
+    assert session.calls[0]['params']['search_fields'] == 'uid,authentication_code'
+
+
+def test_list_invoices_omits_every_optional_filter_when_unset() -> None:
+    client, session = build_client(FakeResponse(200, {'count': 0, 'results': []}))
+
+    page = client.list_invoices(organization_vat=ORGANIZATION_VAT)
+
+    assert session.calls[0]['params'] == {}
+    assert page.next is None
+    assert page.previous is None
+
+
+def test_list_invoices_accepts_an_empty_page_with_matches_on_other_pages() -> None:
+    client, _ = build_client(
+        FakeResponse(
+            200,
+            {
+                'count': 250,
+                'previous': 'https://api.elorusfuse.gr/v1_0/invoice/list/?page=2',
+                'results': [],
+            },
+        )
+    )
+
+    page = client.list_invoices(organization_vat=ORGANIZATION_VAT, page=3)
+
+    assert page.count == 250
+    assert page.results == ()
+
+
+@pytest.mark.parametrize(
+    ('kwargs', 'message'),
+    [
+        ({'organization_vat': ''}, 'organization_vat'),
+        ({'organization_vat': 123456789}, 'organization_vat'),
+        ({'search_fields': ['uid']}, 'search_fields'),
+        ({'period_from': date(2026, 1, 1)}, 'period_from'),
+        ({'period_to': date(2026, 1, 1)}, 'period_from'),
+        (
+            {
+                'period_from': datetime(2026, 1, 1),
+                'period_to': date(2026, 1, 2),
+            },
+            'period_from',
+        ),
+        ({'page': 0}, 'page'),
+        ({'page': True}, 'page'),
+        ({'page_size': 0}, 'page_size'),
+        ({'page_size': 251}, 'page_size'),
+        ({'page_size': True}, 'page_size'),
+        ({'detailed_xml': 1}, 'detailed_xml'),
+        ({'search': 'x', 'search_fields': ['unknown']}, 'search_fields'),
+        ({'invoice_type': '99.9'}, 'invoice_type'),
+        ({'mydata_status': 'unknown'}, 'mydata_status'),
+        ({'transmission_failure': '3'}, 'transmission_failure'),
+    ],
+)
+def test_list_invoices_rejects_invalid_filters_before_request(
+    kwargs: dict[str, Any], message: str
+) -> None:
+    client, session = build_client()
+    call_kwargs = {'organization_vat': ORGANIZATION_VAT, **kwargs}
+
+    with pytest.raises(ValueError, match=message):
+        client.list_invoices(**call_kwargs)
+
+    assert session.calls == []
+
+
+@pytest.mark.parametrize(
+    'body',
+    [
+        [],
+        {'count': 0},
+        {'count': 0, 'results': {}},
+        {'results': []},
+        {'count': True, 'results': []},
+        {'count': 0, 'next': 42, 'results': []},
+        {'count': 0, 'previous': 42, 'results': []},
+        {'count': 0, 'results': [ACCEPTED_BODY]},
+    ],
+)
+def test_list_invoices_rejects_malformed_pages(body: Any) -> None:
+    client, _ = build_client(FakeResponse(200, body))
+
+    with pytest.raises(ElorusFuseProtocolError):
+        client.list_invoices(organization_vat=ORGANIZATION_VAT)
+
+
+@pytest.mark.parametrize(
+    ('response', 'raises', 'error_type'),
+    [
+        (None, requests.Timeout('slow'), ElorusFuseTransportError),
+        (
+            FakeResponse(401, {'detail': 'bad token'}),
+            None,
+            ElorusFuseAuthenticationError,
+        ),
+        (
+            FakeResponse(403, {'detail': 'forbidden'}),
+            None,
+            ElorusFuseAuthenticationError,
+        ),
+        (FakeResponse(500, {'detail': 'down'}), None, ElorusFuseProtocolError),
+    ],
+)
+def test_list_invoices_uses_existing_transport_and_status_errors(
+    response: FakeResponse | None,
+    raises: Exception | None,
+    error_type: type[Exception],
+) -> None:
+    client, _ = build_client(response, raises=raises)
+
+    with pytest.raises(error_type):
+        client.list_invoices(organization_vat=ORGANIZATION_VAT)
+
+
+# find_invoice: strict exact-match convenience
+
+
+def test_find_invoice_rejects_empty_number_before_request() -> None:
+    client, session = build_client()
+
+    with pytest.raises(ValueError, match='number'):
+        client.find_invoice(series='MV', number='', organization_vat=ORGANIZATION_VAT)
+
+    assert session.calls == []
 
 
 @pytest.mark.parametrize(
@@ -558,24 +784,28 @@ def test_find_invoice_preserves_special_series_values(
 
     assert result is not None
     assert session.calls[0]['params']['series'] == wire_series
-
-
-def test_find_invoice_rejects_empty_number_before_request() -> None:
-    client, session = build_client()
-
-    with pytest.raises(ValueError, match='number'):
-        client.find_invoice(series='MV', number='', organization_vat=ORGANIZATION_VAT)
-
-    assert session.calls == []
+    assert session.calls[0]['params']['page_size'] == 2
 
 
 def test_find_invoice_returns_none_for_no_match() -> None:
     client, _ = build_client(FakeResponse(200, {'count': 0, 'results': []}))
 
-    assert (
-        client.find_invoice(series='MV', number='1', organization_vat=ORGANIZATION_VAT)
-        is None
+    result = client.find_invoice(
+        series='MV', number='1', organization_vat=ORGANIZATION_VAT
     )
+    assert result is None
+
+
+def test_find_invoice_returns_the_only_exact_match() -> None:
+    row = {**ACCEPTED_BODY, 'series': 'MV', 'number': '1'}
+    client, _ = build_client(FakeResponse(200, {'count': 1, 'results': [row]}))
+
+    result = client.find_invoice(
+        series='MV', number='1', organization_vat=ORGANIZATION_VAT
+    )
+
+    assert result is not None
+    assert result.uid == row['uid']
 
 
 @pytest.mark.parametrize(
@@ -592,18 +822,20 @@ def test_find_invoice_returns_none_for_no_match() -> None:
         ),
     ],
 )
-def test_find_invoice_reports_duplicates_even_on_a_later_page(
+def test_find_invoice_reports_ambiguity_without_calling_it_a_protocol_error(
     count: int, rows: list[dict[str, Any]], expected_matches: int
 ) -> None:
     client, _ = build_client(FakeResponse(200, {'count': count, 'results': rows}))
 
-    with pytest.raises(ElorusFuseDuplicateInvoiceError) as excinfo:
+    with pytest.raises(ElorusFuseAmbiguousInvoiceError) as excinfo:
         client.find_invoice(series='MV', number='1', organization_vat=ORGANIZATION_VAT)
 
-    assert isinstance(excinfo.value, ElorusFuseProtocolError)
+    assert not isinstance(excinfo.value, ElorusFuseProtocolError)
     assert excinfo.value.count == count
     assert len(excinfo.value.matches) == expected_matches
-    assert {item.uid for item in excinfo.value.matches} == {row['uid'] for row in rows}
+    assert {match.uid for match in excinfo.value.matches} == {
+        row['uid'] for row in rows
+    }
 
 
 @pytest.mark.parametrize(
@@ -612,7 +844,6 @@ def test_find_invoice_reports_duplicates_even_on_a_later_page(
         {**ACCEPTED_BODY, 'series': 'OTHER', 'number': '1'},
         {**ACCEPTED_BODY, 'series': 'MV', 'number': '2'},
         {**ACCEPTED_BODY, 'number': '1'},
-        'bad row',
     ],
 )
 def test_find_invoice_rejects_rows_outside_exact_filter(row: Any) -> None:
@@ -622,49 +853,10 @@ def test_find_invoice_rejects_rows_outside_exact_filter(row: Any) -> None:
         client.find_invoice(series='MV', number='1', organization_vat=ORGANIZATION_VAT)
 
 
-@pytest.mark.parametrize(
-    'body',
-    [
-        [],
-        {'count': 0},
-        {'count': 0, 'results': {}},
-        {'results': []},
-        {'count': True, 'results': []},
-        {'count': 1, 'results': []},
-    ],
-)
-def test_find_invoice_rejects_malformed_or_inconsistent_list(body: Any) -> None:
-    client, _ = build_client(FakeResponse(200, body))
+def test_find_invoice_rejects_an_empty_first_page_with_a_positive_count() -> None:
+    client, _ = build_client(FakeResponse(200, {'count': 1, 'results': []}))
 
     with pytest.raises(ElorusFuseProtocolError):
-        client.find_invoice(series='MV', number='1', organization_vat=ORGANIZATION_VAT)
-
-
-@pytest.mark.parametrize(
-    ('response', 'raises', 'error_type'),
-    [
-        (None, requests.Timeout('slow'), ElorusFuseTransportError),
-        (
-            FakeResponse(401, {'detail': 'bad token'}),
-            None,
-            ElorusFuseAuthenticationError,
-        ),
-        (
-            FakeResponse(403, {'detail': 'forbidden'}),
-            None,
-            ElorusFuseAuthenticationError,
-        ),
-        (FakeResponse(500, {'detail': 'down'}), None, ElorusFuseProtocolError),
-    ],
-)
-def test_find_invoice_uses_existing_transport_and_status_errors(
-    response: FakeResponse | None,
-    raises: Exception | None,
-    error_type: type[Exception],
-) -> None:
-    client, _ = build_client(response, raises=raises)
-
-    with pytest.raises(error_type):
         client.find_invoice(series='MV', number='1', organization_vat=ORGANIZATION_VAT)
 
 
@@ -740,12 +932,13 @@ def test_find_invoice_uses_existing_transport_and_status_errors(
                             'series': 'MV',
                             'number': '1',
                             'debug': 'secret-token',
+                            'mydata_xml': '<token>secret-token</token>',
                         }
                     ],
                 },
             ),
             None,
-            id='duplicate',
+            id='ambiguous',
         ),
         pytest.param(
             'find',

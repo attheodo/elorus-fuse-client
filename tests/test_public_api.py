@@ -4,7 +4,10 @@ from importlib.metadata import version
 
 import elorus_fuse
 from elorus_fuse import (
-    ElorusFuseDuplicateInvoiceError,
+    ElorusFuseAmbiguousInvoiceError,
+    InvoicePage,
+    InvoiceSearchField,
+    InvoiceSeriesFilter,
     VatExemptionCategory,
     quantize_rate,
 )
@@ -22,8 +25,11 @@ def test_all_has_no_duplicates() -> None:
 
 def test_new_public_names_are_exported() -> None:
     assert (
-        elorus_fuse.ElorusFuseDuplicateInvoiceError is ElorusFuseDuplicateInvoiceError
+        elorus_fuse.ElorusFuseAmbiguousInvoiceError is ElorusFuseAmbiguousInvoiceError
     )
+    assert elorus_fuse.InvoicePage is InvoicePage
+    assert elorus_fuse.InvoiceSearchField is InvoiceSearchField
+    assert elorus_fuse.InvoiceSeriesFilter is InvoiceSeriesFilter
     assert elorus_fuse.VatExemptionCategory is VatExemptionCategory
     assert elorus_fuse.quantize_rate is quantize_rate
 

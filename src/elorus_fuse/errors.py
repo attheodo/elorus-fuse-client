@@ -111,8 +111,8 @@ class ElorusFuseProtocolError(ElorusFuseError):
         self.body = body
 
 
-class ElorusFuseDuplicateInvoiceError(ElorusFuseProtocolError):
-    """More than one invoice matched a lookup that must be unique."""
+class ElorusFuseAmbiguousInvoiceError(ElorusFuseError):
+    """A singular lookup matched more than one invoice."""
 
     def __init__(
         self, message: str, *, count: int, matches: Sequence['InvoiceResult']
