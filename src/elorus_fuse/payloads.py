@@ -30,11 +30,13 @@ from .enums import (
     InvoiceType,
     PaymentMethodType,
     VatCategory,
+    VatExemptionCategory,
 )
 
 #: The rounding applied to every amount, both here and by callers computing the
 #: figures they store locally, so the two can never disagree by a cent.
 CENTS = Decimal('0.01')
+FIVE_PLACES = Decimal('0.00001')
 
 
 def _coerce(instance: object, field_name: str, enum: type[Enum]) -> None:
@@ -54,6 +56,11 @@ def _coerce(instance: object, field_name: str, enum: type[Enum]) -> None:
 def quantize_amount(value: Decimal) -> Decimal:
     """Round to the two decimal places Elorus accepts."""
     return Decimal(value).quantize(CENTS, rounding=ROUND_HALF_UP)
+
+
+def quantize_rate(value: Decimal) -> Decimal:
+    """Round a quantity or exchange rate to Elorus' five decimal places."""
+    return Decimal(value).quantize(FIVE_PLACES, rounding=ROUND_HALF_UP)
 
 
 def _amount(value: Decimal) -> str:
@@ -139,9 +146,20 @@ class InvoiceLine:
     vat_category: VatCategory
     vat_amount: Decimal
     income_classifications: Sequence[IncomeClassification] = ()
+    vat_exemption_category: VatExemptionCategory | None = None
+    quantity: Decimal | None = None
+    line_comments_mydata: str = ''
 
     def __post_init__(self) -> None:
         _coerce(self, 'vat_category', VatCategory)
+        if self.vat_exemption_category is not None:
+            _coerce(self, 'vat_exemption_category', VatExemptionCategory)
+        if self.quantity is not None:
+            quantity = Decimal(self.quantity)
+            if not quantity.is_finite() or quantity <= 0:
+                raise ValueError('Invoice line quantity must be greater than zero.')
+        if len(self.line_comments_mydata) > 150:
+            raise ValueError('myDATA line comments cannot exceed 150 characters.')
 
     @property
     def gross_value(self) -> Decimal:
@@ -159,6 +177,12 @@ class InvoiceLine:
                 classification.as_payload()
                 for classification in self.income_classifications
             ]
+        if self.vat_exemption_category is not None:
+            payload['vat_exemption_category'] = self.vat_exemption_category.value
+        if self.quantity is not None:
+            payload['quantity'] = str(quantize_rate(self.quantity))
+        if self.line_comments_mydata:
+            payload['line_comments_mydata'] = self.line_comments_mydata
         return payload
 
 
@@ -195,7 +219,7 @@ class InvoiceDraft:
     """
 
     issuer: Party
-    counterparty: Party
+    counterparty: Party | None
     invoice_type: InvoiceType
     number: str
     issue_date: date
@@ -203,11 +227,16 @@ class InvoiceDraft:
     series: str = ''
     currency: str = 'EUR'
     payment_methods: Sequence[PaymentMethod] = field(default_factory=tuple)
+    exchange_rate: Decimal | None = None
 
     def __post_init__(self) -> None:
         if not self.lines:
             raise ValueError('An invoice draft needs at least one line.')
         _coerce(self, 'invoice_type', InvoiceType)
+        if self.exchange_rate is not None:
+            exchange_rate = Decimal(self.exchange_rate)
+            if not exchange_rate.is_finite() or exchange_rate <= 0:
+                raise ValueError('Invoice exchange rate must be greater than zero.')
 
     @property
     def total_net_value(self) -> Decimal:
@@ -228,7 +257,7 @@ class InvoiceDraft:
     def as_payload(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
             **self.issuer.as_payload('issuer'),
-            **self.counterparty.as_payload('cp'),
+            **(self.counterparty.as_payload('cp') if self.counterparty else {}),
             'invoice_type': self.invoice_type.value,
             'series': self.series,
             'number': self.number,
@@ -243,4 +272,6 @@ class InvoiceDraft:
             payload['payment_methods'] = [
                 method.as_payload() for method in self.payment_methods
             ]
+        if self.exchange_rate is not None:
+            payload['exchange_rate'] = str(quantize_rate(self.exchange_rate))
         return payload

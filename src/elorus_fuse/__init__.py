@@ -23,6 +23,7 @@ from .enums import (
     RejectedReason,
     TransmissionFailure,
     VatCategory,
+    VatExemptionCategory,
 )
 from .environments import BASE_URLS, Environment
 from .errors import (
@@ -42,6 +43,7 @@ from .payloads import (
     Party,
     PaymentMethod,
     quantize_amount,
+    quantize_rate,
 )
 from .responses import InvoiceResult, MyDataError
 
@@ -61,6 +63,7 @@ __all__ = [
     'Party',
     'PaymentMethod',
     'quantize_amount',
+    'quantize_rate',
     # Responses
     'InvoiceResult',
     'MyDataError',
@@ -73,6 +76,7 @@ __all__ = [
     'RejectedReason',
     'TransmissionFailure',
     'VatCategory',
+    'VatExemptionCategory',
     # Errors
     'ElorusFuseAuthenticationError',
     'ElorusFuseConfigurationError',

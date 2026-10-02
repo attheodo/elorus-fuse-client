@@ -117,6 +117,73 @@ class VatCategory(IntEnum):
     VAT_4_LAW_5057 = 10
 
 
+class VatExemptionCategory(IntEnum):
+    """VAT exemption reason, using the provider's myDATA codes."""
+
+    #: Without VAT - article 2 & 3 of the VAT code
+    ARTICLE_2_AND_3 = 1
+    #: Without VAT - article 5 of the VAT code
+    ARTICLE_5 = 2
+    #: Without VAT - article 17 of the VAT code
+    ARTICLE_17 = 3
+    #: Without VAT - article 18 of the VAT code
+    ARTICLE_18 = 4
+    #: Without VAT - article 21 of the VAT code
+    ARTICLE_21 = 5
+    #: Without VAT - article 24 of the VAT code
+    ARTICLE_24 = 6
+    #: Without VAT - article 27 of the VAT code
+    ARTICLE_27 = 7
+    #: Without VAT - article 29 of the VAT code
+    ARTICLE_29 = 8
+    #: Without VAT - article 30 of the VAT code
+    ARTICLE_30 = 9
+    #: Without VAT - article 31 of the VAT code
+    ARTICLE_31 = 10
+    #: Without VAT - article 32 of the VAT code
+    ARTICLE_32 = 11
+    #: Without VAT - article 32 - Seagoing Vessels
+    ARTICLE_32_SEAGOING_VESSELS = 12
+    #: Without VAT - article 32.1.g - Seagoing Vessels
+    ARTICLE_32_1_G_SEAGOING_VESSELS = 13
+    #: Without VAT - article 33 of the VAT code
+    ARTICLE_33 = 14
+    #: Without VAT - article 44 of the VAT code
+    ARTICLE_44 = 15
+    #: Without VAT - article 45 of the VAT code
+    ARTICLE_45 = 16
+    #: Without VAT - article 47 of the VAT code
+    ARTICLE_47 = 17
+    #: Without VAT - article 48 of the VAT code
+    ARTICLE_48 = 18
+    #: Without VAT - article 54 of the VAT code
+    ARTICLE_54 = 19
+    #: VAT included - article 50 of the VAT code
+    VAT_INCLUDED_ARTICLE_50 = 20
+    #: VAT included - article 51 of the VAT code
+    VAT_INCLUDED_ARTICLE_51 = 21
+    #: VAT included - article 52 of the VAT code
+    VAT_INCLUDED_ARTICLE_52 = 22
+    #: VAT included - article 53 of the VAT code
+    VAT_INCLUDED_ARTICLE_53 = 23
+    #: Without VAT - article 8 of the VAT code
+    VAT_INCLUDED_ARTICLE_8 = 24
+    #: Without VAT - POL. 1029/1995
+    POL_1029_1995 = 25
+    #: Without VAT - POL. 1167/2015
+    POL_1167_2015 = 26
+    #: Other VAT exceptions
+    OTHER = 27
+    #: Article 29 (b) (1) (Tax Free)
+    ARTICLE_29_B_1_TAX_FREE = 28
+    #: Article 56 (OSS non-EU scheme)
+    ARTICLE_56_OSS_NON_EU = 29
+    #: Article 57 (OSS EU scheme)
+    ARTICLE_57_OSS_EU = 30
+    #: Article 58 (IOSS)
+    ARTICLE_58_IOSS = 31
+
+
 class PaymentMethodType(IntEnum):
     """How the invoice is settled."""
 

@@ -25,6 +25,7 @@ from elorus_fuse import (
     RejectedReason,
     TransmissionFailure,
     VatCategory,
+    VatExemptionCategory,
 )
 
 DraftFactory = Callable[..., InvoiceDraft]
@@ -37,6 +38,12 @@ def test_int_enums_are_their_codes() -> None:
     assert PaymentMethodType.ON_CREDIT == 5
     assert TransmissionFailure.PROVIDER_TO_MYDATA == 2
     assert RejectedReason.ALREADY_SUBMITTED == 3
+    assert VatExemptionCategory.ARTICLE_57_OSS_EU == 30
+
+
+def test_vat_exemption_vocabulary_covers_each_code_once() -> None:
+    assert len(VatExemptionCategory) == 31
+    assert {member.value for member in VatExemptionCategory} == set(range(1, 32))
 
 
 def test_str_enums_are_their_codes() -> None:
